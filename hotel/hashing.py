@@ -6,9 +6,7 @@ RING_SIZE = 1 << RING_BITS       # 2^64 ตำแหน่ง
 RING_MAX = RING_SIZE - 1
 
 
-def ring_position(text):
-    """แปลงข้อความให้เป็นตำแหน่งบน hash ring แบบ 64 bit"""
-
+def ring_position(text): #hash function หลัก
     # ใช้ SHA-256 เพื่อให้ค่า hash คงที่ทุกครั้งที่รัน
     digest = hashlib.sha256(text.encode("utf-8")).digest()
 

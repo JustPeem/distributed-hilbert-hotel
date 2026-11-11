@@ -1,17 +1,3 @@
-
-"""Consistent Hashing ring with Virtual Nodes (หัวข้อ 4.3, 4.4)
-
-Data structures ที่ใช้ในวงแหวน
-
-- _points : list ของ (position, node_id, j) เรียงจากน้อยไปมาก
-  ถ้ามี position ซ้ำ จะเรียงต่อด้วย node_id และ j
-
-- _node_points : dict node_id -> list ของจุดในอาคารนั้น
-  เอาไว้เช็คว่าอาคารมีอยู่แล้วหรือยัง และใช้ดูจุดของแต่ละอาคาร
-  อีกอย่างคือ dict จะจำลำดับที่เพิ่มข้อมูลเข้ามาได้
-  เลยเอาไปใช้กับวิธี mod N ได้ด้วย
-"""
-
 from bisect import bisect_left
 
 from .errors import (DuplicateNodeError, EmptyRingError, LastNodeError,
@@ -22,13 +8,7 @@ from .validation import require_int
 
 class HashRing:
     def __init__(self, v, salt="", position_fn=None):
-        """สร้าง HashRing โดยกำหนดจำนวน virtual nodes ต่ออาคาร
-
-        v = จำนวน virtual nodes ของแต่ละอาคาร (ไม่เปลี่ยนระหว่างใช้งาน)
-        position_fn ใช้แทน SHA-256 ตอน testing ได้
-        เช่น การทดลองวงแหวนขนาด 100 ในหัวข้อ 9.1
-        """
-        self._v = require_int("V", v, 1)
+        self._v = require_int("V", v, 1) #จำนวน virtual node
         self._salt = str(salt)
 
         if position_fn is None:
@@ -39,7 +19,7 @@ class HashRing:
         self._points = []
         self._node_points = {}
 
-    # Basic information
+    #getter /setterr
 
     @property
     def v(self):
@@ -49,48 +29,40 @@ class HashRing:
     def salt(self):
         return self._salt
 
-    def __len__(self):
-        """จำนวนจุดทั้งหมดบนวงแหวน (M)"""
+    def __len__(self): #node ทั้งหมด
         return len(self._points)
 
     @property
-    def node_count(self):
-        """จำนวนอาคารทั้งหมด (N)"""
+    def node_count(self): #อาคาร
         return len(self._node_points)
 
-    def has_node(self, node_id):
+    def has_node(self, node_id): #เชค node
         return node_id in self._node_points
 
-    def node_ids(self):
-        """คืนรหัสอาคารโดยเรียงจากน้อยไปมาก"""
+    def node_ids(self): # node ไอดีน้อยไปมา
         return sorted(self._node_points)
 
-    def node_ids_in_order(self):
-        """คืนรหัสอาคารตามลำดับที่เพิ่มเข้ามา ใช้ในวิธี mod N"""
+    def node_ids_in_order(self): #list อาคาร
         return list(self._node_points)
 
-    def points(self):
-        """คืนจุดทั้งหมดบนวงแหวนเป็น tuple"""
+    def points(self): #หาทุก node
         return tuple(self._points)
 
-    def points_of(self, node_id):
-        """ดูจุดทั้งหมดของอาคารที่ระบุ"""
+    def points_of(self, node_id): #ดูจุดทั้งหมดตามอาคาร
         if node_id not in self._node_points:
             raise NodeNotFoundError(f"ไม่มีอาคารรหัส {node_id}")
 
         return tuple(self._node_points[node_id])
 
-    # Create / Add / Remove nodes
+    # Create/Add/Remove nodes
 
     def _make_points(self, node_id):
-        """สร้าง virtual nodes ทั้ง V จุดของอาคาร แล้วเรียงตาม position"""
         return sorted(
             (self._position_fn(node_id, j), node_id, j)
             for j in range(self._v)
         )
 
-    def build(self, node_ids):
-        """สร้าง HashRing ตอนเริ่มต้น โดยสร้างจุดของทุกอาคารแล้วเรียงทั้งหมด"""
+    def build(self, node_ids): #สร้าง hashring ตอนเริ่ม
         if self._node_points:
             raise RuntimeError("build() ใช้ได้เฉพาะตอนที่วงแหวนยังว่าง")
 
@@ -112,29 +84,21 @@ class HashRing:
         all_points.sort()
         self._points = all_points
 
-    def add_node(self, node_id):
-        """เพิ่มอาคารใหม่เข้าไปในวงแหวน
-
-        สร้างแค่ V จุดของอาคารใหม่ ส่วนจุดเดิมไม่ต้องสร้างใหม่
-        จากนั้นเอามารวมกับ list เดิมและ sort อีกครั้ง
-        """
+    def add_node(self, node_id): #เพิ่มอาคาร
         require_int("รหัสอาคาร", node_id, 0)
 
         if node_id in self._node_points:
             raise DuplicateNodeError(f"มีอาคารรหัส {node_id} อยู่แล้ว ไม่เพิ่มซ้ำ")
 
         new_points = self._make_points(node_id)
-
         merged = self._points + new_points
         merged.sort()
-
         self._points = merged
         self._node_points[node_id] = new_points
 
         return list(new_points)
 
-    def remove_node(self, node_id):
-        """ลบอาคารออกจากวงแหวน รวมถึง virtual nodes ทั้งหมดของอาคารนั้น"""
+    def remove_node(self, node_id): #ลบอาคาร
         if node_id not in self._node_points:
             raise NodeNotFoundError(f"ไม่มีอาคารรหัส {node_id} จึงไม่ได้ลบอะไร")
 
@@ -150,15 +114,7 @@ class HashRing:
 
     # Search
 
-    def locate_index(self, position):
-        """หาตำแหน่ง index ของจุดแรกที่มี position >= ค่าที่รับเข้ามา
-
-        ถ้าหาไม่เจอจะวนกลับไปใช้จุดแรกของวงแหวน
-        ใช้ binary search จึงมีความซับซ้อน O(log M)
-
-        ใช้ (position,) ใน bisect_left เพราะเป็น tuple ที่มีสมาชิกตัวเดียว
-        ทำให้ได้จุดแรกเมื่อมีหลายจุดที่ position เท่ากัน
-        """
+    def locate_index(self, position): #หาจุดตา่ม index
         if not self._points:
             raise EmptyRingError("วงแหวนว่าง ไม่มีอาคารให้เลือก")
 
@@ -169,22 +125,10 @@ class HashRing:
 
         return i
 
-    def locate(self, position):
-        """หา node_id ของอาคารที่รับผิดชอบ position นี้"""
+    def locate(self, position): #หา id อาคาร
         return self._points[self.locate_index(position)][1]
 
-    def owned_arcs(self, node_id):
-        """หา range บนวงแหวนที่เป็นของอาคารที่ระบุ
-
-        คืนค่าเป็น list ของ (lo, hi)
-        หมายถึงตำแหน่งที่ lo < x <= hi
-        ถ้า lo = -1 แปลว่าเริ่มนับตั้งแต่ตำแหน่ง 0
-
-        แต่ละจุดจะรับผิดชอบช่วงตั้งแต่จุดก่อนหน้ามาจนถึงตัวเอง
-        ถ้าจุดก่อนหน้ามี position เท่ากัน แปลว่าจุดนี้ไม่ได้รับช่วงใดเลย
-
-        สำหรับจุดแรกจะมีช่วงที่วนกลับมาจากท้ายวงแหวนด้วย
-        """
+    def owned_arcs(self, node_id): #หา range ของ อาคาร
         if node_id not in self._node_points:
             raise NodeNotFoundError(f"ไม่มีอาคารรหัส {node_id}")
 

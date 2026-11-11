@@ -1,8 +1,3 @@
-"""Custom errors สำหรับจัดการข้อผิดพลาดของระบบโรงแรม"""
-
-# ทุก error จะสืบทอดจาก HotelError
-# เพื่อให้ UI สามารถ catch ได้จาก class เดียว
-
 class HotelError(Exception):
     """Base exception ของระบบโรงแรม"""
 
