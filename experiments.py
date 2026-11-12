@@ -1,5 +1,4 @@
-"""การทดลอง A, B, C (หัวข้อ 7) และการทดลองเสริม D, E
-
+"""
 รัน:  python experiments.py            (ชุดเต็ม)
       python experiments.py --quick    (ขนาดเล็ก ใช้ตรวจว่าสคริปต์ทำงาน)
 ผลลัพธ์อยู่ในโฟลเดอร์ results/ แล้วสร้างกราฟด้วย python make_plots.py
