@@ -14,7 +14,6 @@ from .validation import require_int
 
 @dataclass(frozen=True)
 class Move:
-    """แขกหนึ่งคนที่เปลี่ยนอาคาร (room_no คงเดิมเสมอ)"""
     channel_id: int
     sequence_id: int
     old_node: int
@@ -24,16 +23,15 @@ class Move:
 
 @dataclass
 class MoveReport:
-    """ผลของคำสั่งเพิ่ม/ลบอาคารหนึ่งครั้ง (หัวข้อ 4.4)"""
-    operation: str            # "add_node" หรือ "remove_node"
+    operation: str
     node_id: int
-    method: str               # "ch-range" (แบบ ข), "ch-scan" (แบบ ก), "mod-n"
-    guests_total: int         # K ก่อนคำสั่ง
-    nodes_before: int         # N ก่อนคำสั่ง
+    method: str
+    guests_total: int
+    nodes_before: int
     moves: list = field(default_factory=list)
-    ring_update_s: float = 0.0   # (ก) ปรับวงแหวน / รายการอาคาร
-    find_s: float = 0.0          # (ข) หาแขกที่ได้รับผลกระทบ
-    apply_s: float = 0.0         # (ค) ปรับข้อมูลและดัชนีของแขกที่ย้าย
+    ring_update_s: float = 0.0
+    find_s: float = 0.0
+    apply_s: float = 0.0
 
     @property
     def moved_count(self):
@@ -41,7 +39,6 @@ class MoveReport:
 
     @property
     def move_rate(self):
-        """จำนวนแขกที่ย้าย / K หรือ None เมื่อ K = 0 (ไม่คำนวณอัตรา)"""
         if self.guests_total == 0:
             return None
         return self.moved_count / self.guests_total
@@ -247,7 +244,6 @@ class HotelSystem:
         return {k: g.address for k, g in self._guests.items()}
 
     def add_node(self, node_id):
-        """ฟังก์ชันที่ 4 (เพิ่ม): แขกที่ย้ายต้องย้ายเข้าอาคารใหม่เท่านั้น"""
         require_int("รหัสอาคาร", node_id, 0)
         if self._ring.has_node(node_id):
             raise DuplicateNodeError(f"มีอาคารรหัส {node_id} อยู่แล้ว ไม่เพิ่มซ้ำ")
@@ -277,7 +273,6 @@ class HotelSystem:
         return report
 
     def remove_node(self, node_id):
-        """ฟังก์ชันที่ 4 (ลบ): แขกในอาคารอื่นต้องไม่ย้าย"""
         require_int("รหัสอาคาร", node_id, 0)
         if not self._ring.has_node(node_id):
             raise NodeNotFoundError(f"ไม่มีอาคารรหัส {node_id} จึงไม่ได้ลบอะไร (ไม่มีแขกย้าย)")
@@ -289,7 +284,6 @@ class HotelSystem:
         self._ring.remove_node(node_id)
         t1 = time.perf_counter()
         if self.reassign == "range":
-            # แขกที่ได้รับผลกระทบคือแขกในช่วงของอาคารที่ถูกลบ = แขกของอาคารนั้นพอดี
             locate = self._ring.locate
             moves = []
             for key in self._node_guests[node_id]:
@@ -307,7 +301,6 @@ class HotelSystem:
         return report
 
     def _scan_changes(self):
-        """แบบ ก: คำนวณอาคารใหม่ให้แขกทุกคน O(K log M)"""
         locate = self._ring.locate
         moves = []
         for guest in self._guests.values():
@@ -317,9 +310,6 @@ class HotelSystem:
         return moves
 
     def _apply_moves(self, moves):
-        """ปรับ Guest, _room_index และ _node_guests ให้สอดคล้องกัน: O(m) เมื่อ m = จำนวนที่ย้าย
-        (_sorted ไม่ต้องแก้ เพราะตำแหน่งบนวงแหวนของแขกไม่เปลี่ยน)
-        """
         for m in moves:
             key = (m.channel_id, m.sequence_id)
             guest = self._guests[key]
