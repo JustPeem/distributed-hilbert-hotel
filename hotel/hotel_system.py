@@ -1,13 +1,3 @@
-"""ระบบโรงแรมแบบกระจาย: ตรรกะหลัก ไม่มี input/print
-
-สมุด 5 อย่าง ต้องตรงกันทุกครั้งที่ข้อมูลเปลี่ยน
-1. _guests       (c, s) -> Guest
-2. _room_index   (node_id, room_no) -> Guest
-3. _node_guests  node_id -> set ของ (c, s)
-4. _sorted       list (position, c, s) เรียงตามตำแหน่ง
-5. _ring         HashRing
-"""
-
 import math
 import time
 from bisect import bisect_left
@@ -24,7 +14,7 @@ from .validation import require_int
 
 @dataclass(frozen=True)
 class Move:
-    """แขกที่ย้ายอาคาร (room_no เท่าเดิม)"""
+    """แขกหนึ่งคนที่เปลี่ยนอาคาร (room_no คงเดิมเสมอ)"""
     channel_id: int
     sequence_id: int
     old_node: int
@@ -34,16 +24,16 @@ class Move:
 
 @dataclass
 class MoveReport:
-    """ผลการเพิ่ม/ลบอาคาร 1 ครั้ง (4.4)"""
+    """ผลของคำสั่งเพิ่ม/ลบอาคารหนึ่งครั้ง (หัวข้อ 4.4)"""
     operation: str            # "add_node" หรือ "remove_node"
     node_id: int
     method: str               # "ch-range" (แบบ ข), "ch-scan" (แบบ ก), "mod-n"
     guests_total: int         # K ก่อนคำสั่ง
     nodes_before: int         # N ก่อนคำสั่ง
     moves: list = field(default_factory=list)
-    ring_update_s: float = 0.0   # (ก) ปรับวงแหวน
-    find_s: float = 0.0          # (ข) หาแขกที่โดนผลกระทบ
-    apply_s: float = 0.0         # (ค) ปรับข้อมูล
+    ring_update_s: float = 0.0   # (ก) ปรับวงแหวน / รายการอาคาร
+    find_s: float = 0.0          # (ข) หาแขกที่ได้รับผลกระทบ
+    apply_s: float = 0.0         # (ค) ปรับข้อมูลและดัชนีของแขกที่ย้าย
 
     @property
     def moved_count(self):
@@ -51,7 +41,7 @@ class MoveReport:
 
     @property
     def move_rate(self):
-        """ย้าย / K  (None ถ้า K = 0)"""
+        """จำนวนแขกที่ย้าย / K หรือ None เมื่อ K = 0 (ไม่คำนวณอัตรา)"""
         if self.guests_total == 0:
             return None
         return self.moved_count / self.guests_total
@@ -66,33 +56,30 @@ class MoveReport:
 
 @dataclass
 class LoadStats:
-    counts: dict              # node_id -> จำนวนแขก (รวมอาคารที่มี 0 คน)
+    counts: dict
     total: int
     maximum: int
     minimum: int
     mean: float
-    std: float                # SD ประชากร (หาร N)
-    cv: object                # std / mean (None ถ้าไม่มีแขก)
+    std: float
+    cv: object
 
 
 def compute_load_stats(counts):
-    """สถิติโหลดจาก dict node_id -> จำนวน"""
     ordered = {nid: counts[nid] for nid in sorted(counts)}
-    vals = list(ordered.values())
-    total = sum(vals)
-    if total == 0 or not vals:
+    values = list(ordered.values())
+    total = sum(values)
+    if total == 0 or not values:
         return LoadStats(ordered, 0, 0, 0, 0.0, 0.0, None)
-    n = len(vals)
+    n = len(values)
     mean = total / n
-    std = math.sqrt(sum((x - mean) ** 2 for x in vals) / n)
-    return LoadStats(ordered, total, max(vals), min(vals), mean, std, std / mean)
+    std = math.sqrt(sum((x - mean) ** 2 for x in values) / n)
+    return LoadStats(ordered, total, max(values), min(values), mean, std, std / mean)
 
 
 class HotelSystem:
     def __init__(self, node_ids, v, salt="", reassign="range",
                  guest_position_fn=None, node_position_fn=None):
-        # reassign: "range" = แบบ ข, "scan" = แบบ ก
-        # *_position_fn ใช้แทน SHA-256 ในเทสต์เท่านั้น
         if reassign not in ("range", "scan"):
             raise InvalidInputError("reassign ต้องเป็น 'range' หรือ 'scan'")
         ids = list(node_ids)
@@ -100,32 +87,30 @@ class HotelSystem:
             raise InvalidInputError("ต้องมีอาคารอย่างน้อย 1 หลัง (N ≥ 1)")
         self._salt = str(salt)
         if guest_position_fn is None:
-            sl = self._salt
-            guest_position_fn = lambda c, s: guest_position(c, s, sl)
+            salt_text = self._salt
+            guest_position_fn = lambda c, s: guest_position(c, s, salt_text)
         self._guest_pos_fn = guest_position_fn
         self._node_pos_fn = node_position_fn
         self._ring = HashRing(v, self._salt, node_position_fn)
         self._ring.build(ids)
         self._guests = {}
         self._room_index = {}
-        self._node_guests = {nid: set() for nid in ids}
+        self._node_guests = {node_id: set() for node_id in ids}
         self._sorted = []
         self.reassign = reassign
 
     @classmethod
     def create(cls, n_nodes, v, channel_counts, salt="", **kwargs):
-        # เริ่มระบบ N อาคาร (รหัส 1..N) ช่อง i มีแขก s = 1..counts[i-1]
         require_int("จำนวนอาคาร N", n_nodes, 1)
         counts = list(channel_counts)
-        for i, cnt in enumerate(counts, start=1):
-            require_int(f"จำนวนแขกของช่องทาง {i}", cnt, 0)
-        sys = cls(range(1, n_nodes + 1), v, salt, **kwargs)
-        keys = [(c, s) for c, cnt in enumerate(counts, start=1)
-                for s in range(1, cnt + 1)]
-        sys.add_guests(keys)
-        return sys
+        for i, count in enumerate(counts, start=1):
+            require_int(f"จำนวนแขกของช่องทาง {i}", count, 0)
+        system = cls(range(1, n_nodes + 1), v, salt, **kwargs)
+        keys = [(c, s) for c, count in enumerate(counts, start=1)
+                for s in range(1, count + 1)]
+        system.add_guests(keys)
+        return system
 
-    # ---------- ข้อมูลพื้นฐาน ----------
     @property
     def ring(self):
         return self._ring
@@ -140,11 +125,11 @@ class HotelSystem:
 
     @property
     def guest_count(self):
-        return len(self._guests)    # K
+        return len(self._guests)
 
     @property
     def node_count(self):
-        return self._ring.node_count    # N
+        return self._ring.node_count
 
     def node_ids(self):
         return self._ring.node_ids()
@@ -152,51 +137,47 @@ class HotelSystem:
     def guest_keys(self):
         return list(self._guests)
 
-    # ---------- ภายใน ----------
     def _make_guest(self, c, s):
-        pos = self._guest_pos_fn(c, s)
-        return Guest(c, s, cantor_room(c, s), pos, self._ring.locate(pos))
+        position = self._guest_pos_fn(c, s)
+        return Guest(c, s, cantor_room(c, s), position, self._ring.locate(position))
 
-    def _index_guest(self, g):
-        addr = g.address
-        if addr in self._room_index:    # ไม่น่าเกิด room_no ไม่ซ้ำ
-            raise RuntimeError(f"ที่อยู่ห้อง {addr} ถูกใช้แล้ว")
-        self._guests[g.key] = g
-        self._room_index[addr] = g
-        self._node_guests[g.node_id].add(g.key)
+    def _index_guest(self, guest):
+        key = guest.key
+        address = guest.address
+        if address in self._room_index:
+            raise RuntimeError(f"ที่อยู่ห้อง {address} ถูกใช้แล้ว")
+        self._guests[key] = guest
+        self._room_index[address] = guest
+        self._node_guests[guest.node_id].add(key)
 
-    # ---------- เพิ่ม / นำแขกออก ----------
     def add_guest(self, c, s):
         require_int("c (ช่องทาง)", c, 1)
         require_int("s (ลำดับ)", s, 1)
         if (c, s) in self._guests:
             raise DuplicateGuestError(f"แขก ({c}, {s}) อยู่ในระบบแล้ว ไม่เพิ่มซ้ำ")
-        g = self._make_guest(c, s)
-        self._index_guest(g)
-        e = (g.position, c, s)
-        self._sorted.insert(bisect_left(self._sorted, e), e)
-        return g
+        guest = self._make_guest(c, s)
+        self._index_guest(guest)
+        entry = (guest.position, c, s)
+        self._sorted.insert(bisect_left(self._sorted, entry), entry)
+        return guest
 
     def add_group(self, c, s_start, count):
-        # ช่อง c ลำดับ s_start .. s_start+count-1
-        # count=0 ไม่ทำอะไร / ซ้ำคนเดียว ปฏิเสธทั้งกลุ่ม
         require_int("c (ช่องทาง)", c, 1)
         require_int("s_start", s_start, 1)
         require_int("จำนวนแขก", count, 0)
         if count == 0:
             return []
         keys = [(c, s) for s in range(s_start, s_start + count)]
-        dup = [k for k in keys if k in self._guests]
-        if dup:
-            ex = ", ".join(str(k) for k in dup[:5])
-            more = " ..." if len(dup) > 5 else ""
+        conflicts = [k for k in keys if k in self._guests]
+        if conflicts:
+            sample = ", ".join(str(k) for k in conflicts[:5])
+            more = " ..." if len(conflicts) > 5 else ""
             raise DuplicateGuestError(
                 f"ช่วง ({c}, {s_start})–({c}, {s_start + count - 1}) ทับกับแขกที่มีอยู่ "
-                f"{len(dup)} คน เช่น {ex}{more} — ปฏิเสธทั้งกลุ่ม ข้อมูลเดิมไม่เปลี่ยน")
+                f"{len(conflicts)} คน เช่น {sample}{more} — ปฏิเสธทั้งกลุ่ม ข้อมูลเดิมไม่เปลี่ยน")
         return self._insert_many(keys)
 
     def add_guests(self, keys):
-        # เพิ่มหลายคน ทั้งหมดหรือไม่เลย (ใช้ตอน create / คัดลอกชุดแขก)
         keys = list(keys)
         seen = set()
         for c, s in keys:
@@ -208,59 +189,53 @@ class HotelSystem:
         return self._insert_many(keys)
 
     def _insert_many(self, keys):
-        new = [self._make_guest(c, s) for c, s in keys]
-        for g in new:
-            self._index_guest(g)
-        es = sorted((g.position, g.c, g.s) for g in new)
-        m = self._sorted + es
-        m.sort()    # 2 ช่วงเรียงแล้ว timsort ผสานเร็ว
-        self._sorted = m
-        return new
+        new_guests = [self._make_guest(c, s) for c, s in keys]
+        for guest in new_guests:
+            self._index_guest(guest)
+        entries = sorted((g.position, g.c, g.s) for g in new_guests)
+        merged = self._sorted + entries
+        merged.sort()
+        self._sorted = merged
+        return new_guests
 
     def remove_guest(self, c, s):
         require_int("c (ช่องทาง)", c, 1)
         require_int("s (ลำดับ)", s, 1)
-        g = self._guests.get((c, s))
-        if g is None:
+        guest = self._guests.get((c, s))
+        if guest is None:
             raise GuestNotFoundError(f"ไม่พบแขก ({c}, {s}) จึงไม่ได้นำใครออก")
         del self._guests[(c, s)]
-        del self._room_index[g.address]
-        self._node_guests[g.node_id].discard((c, s))
-        e = (g.position, c, s)
-        i = bisect_left(self._sorted, e)
-        if i == len(self._sorted) or self._sorted[i] != e:
+        del self._room_index[guest.address]
+        self._node_guests[guest.node_id].discard((c, s))
+        entry = (guest.position, c, s)
+        i = bisect_left(self._sorted, entry)
+        if i == len(self._sorted) or self._sorted[i] != entry:
             raise RuntimeError("ดัชนีตำแหน่งไม่สอดคล้องกับข้อมูลแขก")
         del self._sorted[i]
-        return g
+        return guest
 
-    # ---------- ค้นหา ----------
     def find_by_guest(self, c, s):
-        # คืน Guest หรือ None
         require_int("c (ช่องทาง)", c, 1)
         require_int("s (ลำดับ)", s, 1)
         return self._guests.get((c, s))
 
     def find_by_room(self, node_id, room_no):
-        # คืน Guest หรือ None
         require_int("รหัสอาคาร", node_id, 0)
         require_int("room_no", room_no, 1)
         return self._room_index.get((node_id, room_no))
 
     def compute_node(self, c, s):
-        # คำนวณใหม่จากวงแหวน ไม่ใช้ค่าที่จดไว้
         require_int("c (ช่องทาง)", c, 1)
         require_int("s (ลำดับ)", s, 1)
         return self._ring.locate(self._guest_pos_fn(c, s))
 
-    # ---------- รายการและสถิติ ----------
     def list_rooms(self):
-        # เรียง node_id แล้ว room_no
-        res = []
-        for nid in sorted(self._node_guests):
-            grp = [self._guests[k] for k in self._node_guests[nid]]
-            grp.sort(key=lambda g: g.room_no)
-            res.extend(grp)
-        return res
+        result = []
+        for node_id in sorted(self._node_guests):
+            group = [self._guests[k] for k in self._node_guests[node_id]]
+            group.sort(key=lambda g: g.room_no)
+            result.extend(group)
+        return result
 
     def load_counts(self):
         return {nid: len(keys) for nid, keys in self._node_guests.items()}
@@ -269,10 +244,8 @@ class HotelSystem:
         return compute_load_stats(self.load_counts())
 
     def assignments(self):
-        # snapshot (c, s) -> (node_id, room_no)
         return {k: g.address for k, g in self._guests.items()}
 
-    # ---------- เพิ่ม / ลบอาคาร (ของคนที่ 3 ไม่ได้แก้) ----------
     def add_node(self, node_id):
         """ฟังก์ชันที่ 4 (เพิ่ม): แขกที่ย้ายต้องย้ายเข้าอาคารใหม่เท่านั้น"""
         require_int("รหัสอาคาร", node_id, 0)
@@ -356,33 +329,31 @@ class HotelSystem:
             self._room_index[(m.new_node, m.room_no)] = guest
             self._node_guests[m.new_node].add(key)
 
-    # ---------- ตรวจความสอดคล้อง ----------
     def check_consistency(self):
-        # คืนรายการปัญหา ว่าง = ปกติ
-        bad = []
+        problems = []
         k = len(self._guests)
         if len(self._room_index) != k:
-            bad.append(f"room_index มี {len(self._room_index)} รายการ แต่มีแขก {k} คน")
+            problems.append(f"room_index มี {len(self._room_index)} รายการ แต่มีแขก {k} คน")
         if len(self._sorted) != k:
-            bad.append(f"ดัชนีตำแหน่งมี {len(self._sorted)} รายการ แต่มีแขก {k} คน")
+            problems.append(f"ดัชนีตำแหน่งมี {len(self._sorted)} รายการ แต่มีแขก {k} คน")
         if sum(len(v) for v in self._node_guests.values()) != k:
-            bad.append("ผลรวมแขกรายอาคารไม่เท่ากับ K")
+            problems.append("ผลรวมแขกรายอาคารไม่เท่ากับ K")
         if set(self._node_guests) != set(self._ring.node_ids()):
-            bad.append("รายชื่ออาคารในดัชนีไม่ตรงกับวงแหวน")
+            problems.append("รายชื่ออาคารในดัชนีไม่ตรงกับวงแหวน")
         if any(self._sorted[i] > self._sorted[i + 1] for i in range(len(self._sorted) - 1)):
-            bad.append("ดัชนีตำแหน่งไม่ได้เรียง")
+            problems.append("ดัชนีตำแหน่งไม่ได้เรียง")
         for key, g in self._guests.items():
             if g.room_no != cantor_room(g.c, g.s):
-                bad.append(f"{key}: room_no ไม่ตรงสูตร")
+                problems.append(f"{key}: room_no ไม่ตรงสูตร")
             if g.position != self._guest_pos_fn(g.c, g.s):
-                bad.append(f"{key}: ตำแหน่งไม่ตรงแฮช")
+                problems.append(f"{key}: ตำแหน่งไม่ตรงแฮช")
             if g.node_id != self._ring.locate(g.position):
-                bad.append(f"{key}: อาคารที่บันทึกไม่ตรงกับที่คำนวณจากวงแหวน")
+                problems.append(f"{key}: อาคารที่บันทึกไม่ตรงกับที่คำนวณจากวงแหวน")
             if self._room_index.get(g.address) is not g:
-                bad.append(f"{key}: ค้นด้วยที่อยู่ห้องแล้วไม่ได้แขกคนนี้")
+                problems.append(f"{key}: ค้นด้วยที่อยู่ห้องแล้วไม่ได้แขกคนนี้")
             if key not in self._node_guests.get(g.node_id, ()):
-                bad.append(f"{key}: ไม่อยู่ในรายชื่อแขกของอาคาร {g.node_id}")
+                problems.append(f"{key}: ไม่อยู่ในรายชื่อแขกของอาคาร {g.node_id}")
         if {(p, c, s) for p, c, s in self._sorted} != \
                 {(g.position, g.c, g.s) for g in self._guests.values()}:
-            bad.append("ดัชนีตำแหน่งมีสมาชิกไม่ตรงกับข้อมูลแขก")
-        return bad
+            problems.append("ดัชนีตำแหน่งมีสมาชิกไม่ตรงกับข้อมูลแขก")
+        return problems
