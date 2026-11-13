@@ -1,0 +1,15 @@
+key,value
+run_at,2026-11-13 22:58:44
+python,3.9.6
+implementation,CPython
+platform,macOS-26.6.2-arm64-arm-64bit
+machine,arm64
+cpu_count,15
+salts,0 1 2
+hash,"SHA-256(UTF-8 text)[:8] big-endian, text = guest:c:s|salt:<salt>, node:id:j|salt:<salt>"
+channels,10
+lookup_batch,1000
+node_op_repeats_per_round,5
+add_node_id,N+1
+remove_node_id,1
+quick_mode,False
